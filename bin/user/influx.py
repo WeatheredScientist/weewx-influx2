@@ -128,7 +128,10 @@ except ImportError:
     # Python 2
     import Queue as queue
 import base64
-from distutils.version import StrictVersion
+import re
+def _ver_tuple(v):
+    # distutils (and StrictVersion) were removed in Python 3.12.
+    return tuple(int(x) for x in re.findall(r'\d+', v)[:3])
 try:
     # Python 3
     import http.client as http_client
@@ -157,7 +160,7 @@ from weeutil.weeutil import to_bool, accumulateLeaves
 VERSION = "0.20"
 
 REQUIRED_WEEWX = "3.5.0"
-if StrictVersion(weewx.__version__) < StrictVersion(REQUIRED_WEEWX):
+if _ver_tuple(weewx.__version__) < _ver_tuple(REQUIRED_WEEWX):
     raise weewx.UnsupportedFeature("weewx %s or greater is required, found %s"
                                    % (REQUIRED_WEEWX, weewx.__version__))
 
@@ -309,10 +312,12 @@ class Influx(weewx.restx.StdRESTbase):
         site_dict.setdefault('augment_record', True)
         site_dict.setdefault('measurement', 'record')
         site_dict.setdefault('add_binding_tag', True)
+        site_dict.setdefault('verify_ssl', True)
 
         site_dict['append_units_label'] = to_bool(
             site_dict.get('append_units_label'))
         site_dict['augment_record'] = to_bool(site_dict.get('augment_record'))
+        site_dict['verify_ssl'] = to_bool(site_dict.get('verify_ssl'))
 
         usn = site_dict.get('unit_system', None)
         if usn in weewx.units.unit_constants:
@@ -383,6 +388,7 @@ class InfluxThread(weewx.restx.RESTThread):
                  unit_system=None, augment_record=True,
                  inputs=dict(), obs_to_upload='most', append_units_label=True,
                  add_binding_tag=True,
+                 verify_ssl=True,
                  skip_upload=False,
                  manager_dict=None,
                  post_interval=None, max_backlog=MAX_SIZE, stale=None,
@@ -415,6 +421,7 @@ class InfluxThread(weewx.restx.RESTThread):
         self.templates = dict()
         self.line_format = line_format
         self.add_binding_tag = to_bool(add_binding_tag)
+        self.verify_ssl = to_bool(verify_ssl)
 
     def get_record(self, record, dbm):
         # We allow the superclass to add stuff to the record only if the user
@@ -451,7 +458,7 @@ class InfluxThread(weewx.restx.RESTThread):
 
     def handle_exception(self, e, count):
         if isinstance(e, HTTPError):
-            payload = e.read.decode()
+            payload = e.read().decode()
             logdbg("exception: %s payload: %s" % (e, payload))
 
             # Influx DB v2 returns 401 for an invalid token and 403 for insufficient
@@ -465,11 +472,21 @@ class InfluxThread(weewx.restx.RESTThread):
         super(InfluxThread, self).handle_exception(e, count)
 
     def post_request(self, request, payload=None):
-        # FIXME: provide full set of ssl options instead of this hack
         if self.server_url.startswith('https'):
             import ssl
+            # Verify the server's certificate by default. This previously called
+            # ssl._create_unverified_context() unconditionally, which silently
+            # disabled certificate verification for EVERY https endpoint --
+            # including InfluxDB Cloud -- so the token travelled over a
+            # connection with no authenticated peer. Set verify_ssl = false to
+            # restore the old behaviour deliberately, for a self-signed or
+            # internal endpoint.
+            if self.verify_ssl:
+                context = ssl.create_default_context()
+            else:
+                context = ssl._create_unverified_context()
             return urlopen(request, data=payload, timeout=self.timeout,
-                           context=ssl._create_unverified_context())
+                           context=context)
         else:
             return super(InfluxThread, self).post_request(request, payload)
 
@@ -479,13 +496,13 @@ class InfluxThread(weewx.restx.RESTThread):
         # create the list of tags
         tags = ''
         binding = record.pop('binding', None)
-        loginf("Add Bindding Tag = %s" % self.add_binding_tag)
+        logdbg("add_binding_tag = %s" % self.add_binding_tag)
         if binding is not None and self.add_binding_tag:
             loginf("Adding Binding Tag")
             tags = ',binding=%s' % binding
         if self.tags:
             tags = '%s,%s' % (tags, self.tags)
-        loginf("tags = %s" % tags)
+        logdbg("tags = %s" % tags)
 
         # if uploading everything, we must check every time the list of
         # variables that should be uploaded since variables may come and
@@ -560,17 +577,17 @@ if __name__ == "__main__":
     parser = optparse.OptionParser(usage=usage)
     parser.add_option('--version', action='store_true',
                       help='Display weewx-influx version')
-    parser.add_option('--server-url', default=os.environ['INFLUX_HOST'],
+    parser.add_option('--server-url', default=os.environ.get('INFLUX_HOST'),
                       help="URL for the InfluxDB server. Default is $INFLUX_HOST",
                       metavar="SERVER-URL")
-    parser.add_option('--org', default=os.environ['INFLUX_ORG'],
+    parser.add_option('--org', default=os.environ.get('INFLUX_ORG'),
                       help="InfluxDB Organization. Default is $INFLUX_ORG",
                       metavar="ORG_NAME")
-    parser.add_option('--token', default=os.environ['INFLUX_TOKEN'],
-                      help="InluxDfB Authorization Token. Default is $INFLUX_TOKEN",
+    parser.add_option('--token', default=os.environ.get('INFLUX_TOKEN'),
+                      help="InfluxDB Authorization Token. Default is $INFLUX_TOKEN",
                       metavar="TOKEN")
     parser.add_option('--bucket', default="WeeWXTest",
-                      help="InluxDfB Bucket, default is 'WeeWXTest'",
+                      help="InfluxDB Bucket, default is 'WeeWXTest'",
                       metavar="BUCKET")
     parser.add_option('--measurement', default='record',
                       help="InfluxDB measurement name. Default is 'record'",
