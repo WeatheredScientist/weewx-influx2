@@ -60,6 +60,7 @@ Here is a complete enumeration of options.  Specify only those that you need.
         append_units_label = (True | False)        # default is true
         unit_system = (US | METRIC | METRICWX)     # default is database system
         augment_record = (True | False)            # default is true
+        verify_ssl = (True | False)                # default is true; false only for trusted internal or self-signed endpoints
         [[[inputs]]]                               # optional
             [[[[observation1]]]]
                 units = degree_F                   # optional for each obs

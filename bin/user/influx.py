@@ -498,7 +498,7 @@ class InfluxThread(weewx.restx.RESTThread):
         binding = record.pop('binding', None)
         logdbg("add_binding_tag = %s" % self.add_binding_tag)
         if binding is not None and self.add_binding_tag:
-            loginf("Adding Binding Tag")
+            logdbg("Adding Binding Tag")
             tags = ',binding=%s' % binding
         if self.tags:
             tags = '%s,%s' % (tags, self.tags)
